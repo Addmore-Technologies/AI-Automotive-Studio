@@ -1,0 +1,43 @@
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+.venv/
+venv/
+env/
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# React / Node
+node_modules/
+dist/
+build/
+npm-debug.log*
+
+# Model weights
+*.pt
+*.pth
+*.onnx
+*.engine
+
+# Uploaded and generated media
+uploads/
+outputs/
+*.mp4
+*.mov
+
+# IDE and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Jupyter
+.ipynb_checkpoints/
