@@ -157,14 +157,151 @@
   background: linear-gradient(to bottom, transparent 40%, var(--background));
 }
 
-.hero-heading { line-height: 1.03; }
-.hero-photograph { max-height: 48svh; }
-@media (min-width: 768px) and (max-height: 900px) {
-  .hero-heading { font-size: 56px; }
-  .hero-photograph { max-height: 40svh; }
+/* ==========================================
+   CINEMATIC AUTOMOTIVE HERO
+   ========================================== */
+
+.hero-section {
+  position: relative;
+  width: 100%;
+  padding-top: 5rem;
+  background: var(--background);
 }
+
+.hero-inner {
+  position: relative;
+  width: 100%;
+  min-height: calc(100svh - 5rem);
+  overflow: hidden;
+}
+
+.hero-heading {
+  position: absolute;
+  z-index: 3;
+  top: 9%;
+  left: 3%;
+  width: 94%;
+  margin: 0;
+  padding: 0;
+  color: var(--foreground);
+  font-family: var(--font-display);
+  font-size: clamp(3.5rem, 7.2vw, 7.2rem);
+  font-weight: 500;
+  line-height: 0.94;
+  letter-spacing: -0.045em;
+  text-align: center;
+  text-transform: uppercase;
+  pointer-events: none;
+}
+
+.hero-image-frame {
+  position: absolute;
+  z-index: 1;
+  top: 27%;
+  right: 3.4%;
+  bottom: 0;
+  left: 3.4%;
+  overflow: hidden;
+  background: #050606;
+}
+
+.hero-image-frame::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    rgb(5 6 6 / 10%) 0%,
+    transparent 30%,
+    transparent 70%,
+    rgb(5 6 6 / 48%) 100%
+  );
+}
+
+.hero-photograph {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  object-fit: cover;
+  object-position: center 53%;
+}
+
+.hero-bottom {
+  position: absolute;
+  z-index: 4;
+  right: 5%;
+  bottom: 4%;
+  left: 5%;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 2rem;
+}
+
+.hero-description {
+  max-width: 420px;
+  margin: 0;
+  color: rgb(242 242 238 / 78%);
+  font-size: clamp(0.85rem, 1.2vw, 1.05rem);
+  line-height: 1.8;
+}
+
+/* Short desktop screens */
+@media (min-width: 768px) and (max-height: 750px) {
+  .hero-inner {
+    min-height: 700px;
+  }
+
+  .hero-heading {
+    top: 7%;
+    font-size: clamp(3.5rem, 6.5vw, 6rem);
+  }
+
+  .hero-image-frame {
+    top: 29%;
+  }
+}
+
+/* Mobile */
 @media (max-width: 767px) {
-  .hero-photograph { max-height: none; }
+  .hero-inner {
+    min-height: 820px;
+  }
+
+  .hero-heading {
+    top: 6%;
+    left: 4%;
+    width: 92%;
+    font-size: clamp(2.5rem, 10vw, 4.2rem);
+    line-height: 0.98;
+    letter-spacing: -0.045em;
+  }
+
+  .hero-image-frame {
+    top: 31%;
+    right: 4%;
+    bottom: 23%;
+    left: 4%;
+  }
+
+  .hero-photograph {
+    object-position: center center;
+  }
+
+  .hero-bottom {
+    right: 6%;
+    bottom: 4%;
+    left: 6%;
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 1.2rem;
+  }
+
+  .hero-description {
+    font-size: 0.82rem;
+  }
 }
 
 @keyframes reveal-up {

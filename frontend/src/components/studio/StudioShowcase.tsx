@@ -1,4 +1,3 @@
-import studio from "@/assets/studio_environment.png.asset.json";
 import { SectionHeader } from "./Primitives";
 
 const specs = [
@@ -21,7 +20,7 @@ export function StudioShowcase() {
 
       <figure className="mt-14">
         <div className="overflow-hidden">
-          <img src={studio.url} alt="Dark showroom with vertical LED strips and glossy floor" loading="lazy"
+          <img src="/images/studio_environment.png.webp" alt="Dark showroom with vertical LED strips and glossy floor" loading="lazy"
             className="aspect-[4/3] w-full object-cover sm:aspect-[16/9]" />
         </div>
         <figcaption className="grid grid-cols-2 border-t border-border md:grid-cols-4">
