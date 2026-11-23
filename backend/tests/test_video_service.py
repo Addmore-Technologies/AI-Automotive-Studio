@@ -3,6 +3,7 @@ Integration tests for video processing, frame extraction, reconstruction, and jo
 """
 
 import os
+import time
 import tempfile
 import cv2
 import numpy as np
@@ -36,11 +37,10 @@ def _create_synthetic_car_video(sample_image_path: str, num_frames: int = 5) -> 
     return video_path
 
 
-def test_video_process_end_to_end(client, sample_car_image_path):
+def test_video_process_async_and_polling(client, sample_car_image_path):
     """
-    Test full end-to-end video processing:
-    upload -> validation -> frame extraction -> AI frame processing with EMA smoothing ->
-    reconstruction -> result retrieval.
+    Test asynchronous video processing and job status polling:
+    upload -> get job_id -> poll /api/jobs/{job_id} until completed -> verify output.
     """
     video_path = _create_synthetic_car_video(sample_car_image_path, num_frames=5)
     assert os.path.exists(video_path)
@@ -49,6 +49,7 @@ def test_video_process_end_to_end(client, sample_car_image_path):
         with open(video_path, "rb") as f:
             video_bytes = f.read()
 
+        # Submit video with default async_mode=True
         response = client.post(
             "/api/video/process",
             files={"file": ("test_clip.mp4", video_bytes, "video/mp4")},
@@ -58,22 +59,35 @@ def test_video_process_end_to_end(client, sample_car_image_path):
         assert response.status_code == status.HTTP_200_OK
         data = response.json()
 
-        assert data["success"] is True
-        assert data["status"] == "completed"
         assert "job_id" in data
         job_id = data["job_id"]
-        assert data["result_url"].startswith("/api/results/studio_")
+        assert data["status"] in ("pending", "processing")
 
-        # Verify job status via /api/jobs/{job_id}
-        job_resp = client.get(f"/api/jobs/{job_id}")
-        assert job_resp.status_code == status.HTTP_200_OK
-        job_data = job_resp.json()
-        assert job_data["status"] == "completed"
-        assert job_data["progress_pct"] == 100.0
-        assert job_data["total_frames"] == 5
+        # Poll /api/jobs/{job_id} until completion
+        max_attempts = 30
+        completed = False
+        final_job_data = None
+
+        for _ in range(max_attempts):
+            time.sleep(1.0)
+            job_resp = client.get(f"/api/jobs/{job_id}")
+            assert job_resp.status_code == status.HTTP_200_OK
+            job_data = job_resp.json()
+
+            if job_data["status"] == "completed":
+                completed = True
+                final_job_data = job_data
+                break
+            elif job_data["status"] == "failed":
+                break
+
+        assert completed is True, f"Job did not complete in time: {job_data}"
+        assert final_job_data["progress_pct"] == 100.0
+        assert final_job_data["result_url"].startswith("/api/results/studio_")
+        assert final_job_data["total_frames"] == 5
 
         # Verify result video retrieval
-        res_resp = client.get(data["result_url"])
+        res_resp = client.get(final_job_data["result_url"])
         assert res_resp.status_code == status.HTTP_200_OK
         assert res_resp.headers["content-type"] == "video/mp4"
 
@@ -101,11 +115,39 @@ def test_video_process_end_to_end(client, sample_car_image_path):
             os.remove(video_path)
 
 
-def test_video_no_vehicle_detected(client):
+def test_video_process_sync_fallback(client, sample_car_image_path):
     """
-    Verify that a video with no cars triggers HTTP 422 with NO_VEHICLE_DETECTED.
+    Test synchronous video processing fallback via async_mode=false:
+    upload -> immediate completed response.
     """
-    tmp_path = os.path.join(tempfile.gettempdir(), "blank_video.mp4")
+    video_path = _create_synthetic_car_video(sample_car_image_path, num_frames=3)
+    assert os.path.exists(video_path)
+
+    try:
+        with open(video_path, "rb") as f:
+            video_bytes = f.read()
+
+        response = client.post(
+            "/api/video/process?async_mode=false",
+            files={"file": ("sync_test.mp4", video_bytes, "video/mp4")},
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        assert data["success"] is True
+        assert data["status"] == "completed"
+        assert "job_id" in data
+        assert data["result_url"].startswith("/api/results/studio_")
+    finally:
+        if os.path.exists(video_path):
+            os.remove(video_path)
+
+
+def test_video_no_vehicle_detected_async(client):
+    """
+    Verify that an async video with no cars transitions to failed status with an informative error.
+    """
+    tmp_path = os.path.join(tempfile.gettempdir(), "blank_async_video.mp4")
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     writer = cv2.VideoWriter(tmp_path, fourcc, 24.0, (320, 240))
     for _ in range(3):
@@ -118,7 +160,51 @@ def test_video_no_vehicle_detected(client):
 
         response = client.post(
             "/api/video/process",
-            files={"file": ("blank.mp4", video_bytes, "video/mp4")},
+            files={"file": ("blank_async.mp4", video_bytes, "video/mp4")},
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        job_id = response.json()["job_id"]
+
+        # Poll until failed
+        failed = False
+        err_msg = ""
+        for _ in range(20):
+            time.sleep(0.5)
+            job_resp = client.get(f"/api/jobs/{job_id}")
+            if job_resp.status_code == status.HTTP_200_OK:
+                job_data = job_resp.json()
+                if job_data["status"] == "failed":
+                    failed = True
+                    err_msg = job_data.get("error", "")
+                    break
+
+        assert failed is True
+        assert "no vehicle" in err_msg.lower()
+
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+
+def test_video_no_vehicle_detected_sync(client):
+    """
+    Verify that a synchronous video with no cars triggers HTTP 422 with NO_VEHICLE_DETECTED.
+    """
+    tmp_path = os.path.join(tempfile.gettempdir(), "blank_sync_video.mp4")
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    writer = cv2.VideoWriter(tmp_path, fourcc, 24.0, (320, 240))
+    for _ in range(3):
+        writer.write(np.zeros((240, 320, 3), dtype=np.uint8))
+    writer.release()
+
+    try:
+        with open(tmp_path, "rb") as f:
+            video_bytes = f.read()
+
+        response = client.post(
+            "/api/video/process?async_mode=false",
+            files={"file": ("blank_sync.mp4", video_bytes, "video/mp4")},
         )
 
         assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY

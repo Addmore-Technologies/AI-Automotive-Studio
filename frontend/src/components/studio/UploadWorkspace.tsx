@@ -1,12 +1,12 @@
 import { useRef, useState } from "react";
-import { isBackendConfigured, processMedia, StudioApiError, type MediaKind, type StudioResult } from "@/services/studioApi";
+import { isBackendConfigured, processMedia, StudioApiError, type MediaKind, type StudioResult, type JobProgressInfo } from "@/services/studioApi";
 import { SectionHeader, Tag } from "./Primitives";
 import { UploadPanel } from "./UploadPanel";
 import { ProcessingStatus } from "./ProcessingStatus";
 import { ResultDisplay } from "./ResultDisplay";
 import { Button } from "@/components/ui/button";
 
-type Phase = { s: "idle" } | { s: "processing" } | { s: "done"; result: StudioResult } | { s: "error"; error: string; code: string };
+type Phase = { s: "idle" } | { s: "processing"; progress?: JobProgressInfo } | { s: "done"; result: StudioResult } | { s: "error"; error: string; code: string };
 
 export function UploadWorkspace() {
   const [mode, setMode] = useState<MediaKind>("image");
@@ -21,7 +21,9 @@ export function UploadWorkspace() {
     abort.current = new AbortController();
     setPhase({ s: "processing" });
     try {
-      const result = await processMedia(file, mode, abort.current.signal);
+      const result = await processMedia(file, mode, abort.current.signal, (progress) => {
+        setPhase({ s: "processing", progress });
+      });
       setPhase({ s: "done", result });
     } catch (e) {
       if ((e as Error).name === "AbortError") return setPhase({ s: "idle" });
@@ -70,7 +72,7 @@ export function UploadWorkspace() {
         </div>
 
         <div className="mt-6">
-          {busy && <ProcessingStatus kind={mode} />}
+          {busy && <ProcessingStatus kind={mode} progress={phase.s === "processing" ? phase.progress : undefined} />}
           {phase.s === "error" && (
             <div role="alert" className="border border-destructive/50 p-6 md:p-8">
               <span className="label-mono text-destructive">✕ {phase.code === "no_vehicle" ? "No vehicle detected" : phase.code === "not_configured" ? "Backend not connected" : "Processing failed"}</span>

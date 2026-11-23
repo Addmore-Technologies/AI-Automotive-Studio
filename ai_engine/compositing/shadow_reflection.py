@@ -238,16 +238,31 @@ class ShadowReflectionGenerator:
         comp_rgb = cv2.resize(refl_content_rgb, (vw, comp_h), interpolation=cv2.INTER_LINEAR)
         comp_alpha = cv2.resize(refl_content_alpha, (vw, comp_h), interpolation=cv2.INTER_LINEAR)
 
-        # 3. Progressive distance falloff gradient (quadratic falloff)
-        max_refl_h = int(vh * self.reflection_falloff_height)
+        # 3. Progressive distance falloff gradient
+        max_refl_h = max(
+            1,
+            int(vh * self.reflection_falloff_height)
+        )
+
         comp_h = min(comp_h, max_refl_h)
+
+        if comp_h <= 0:
+            return reflection_rgb, reflection_alpha
+
         comp_rgb = comp_rgb[:comp_h, :]
         comp_alpha = comp_alpha[:comp_h, :]
 
         y_indices = np.arange(comp_h, dtype=np.float32)
-        # Falloff curve: 1.0 at contact line (y=0) to 0.0 at comp_h
-        falloff = (1.0 - (y_indices / float(comp_h))) ** 1.8
-        comp_alpha = comp_alpha * falloff[:, None] * self.reflection_opacity
+
+        falloff = (
+            1.0 - (y_indices / float(comp_h))
+        ) ** 1.8
+
+        comp_alpha = (
+            comp_alpha
+            * falloff[:, None]
+            * self.reflection_opacity
+        )
 
         # 4. Surface roughness blur
         k = self.reflection_blur_kernel

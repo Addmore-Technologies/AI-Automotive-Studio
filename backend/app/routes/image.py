@@ -1,6 +1,6 @@
-"""
-Image processing endpoints.
-"""
+import logging
+
+logger = logging.getLogger(__name__)
 
 from typing import Optional
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, status
@@ -94,9 +94,14 @@ async def process_image_endpoint(
             detail={"status": "AI_PIPELINE_ERROR", "error": str(e)},
         )
     except Exception as e:
+        logger.exception("Unexpected error during image processing")
+
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"status": "INTERNAL_ERROR", "error": f"An unexpected error occurred: {e}"},
+            detail={
+                "status": "INTERNAL_ERROR",
+                "error": f"An unexpected error occurred: {e}",
+            },
         )
     finally:
         await file.close()

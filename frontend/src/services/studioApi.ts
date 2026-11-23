@@ -14,6 +14,16 @@
 
 export type MediaKind = "image" | "video";
 
+export interface JobProgressInfo {
+  jobId?: string;
+  status: "pending" | "processing" | "completed" | "failed";
+  progressPct: number;
+  stage?: string;
+  message?: string;
+  currentFrame?: number;
+  totalFrames?: number;
+}
+
 export interface StudioResult {
   kind: MediaKind;
   resultUrl: string | null;
@@ -64,36 +74,203 @@ function parseResult(kind: MediaKind, fileName: string, data: Record<string, unk
   };
 }
 
-export async function processMedia(file: File, kind: MediaKind, signal?: AbortSignal): Promise<StudioResult> {
+/** Cancellable delay helper using AbortSignal. */
+function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new DOMException("Aborted", "AbortError"));
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+export async function processMedia(
+  file: File,
+  kind: MediaKind,
+  signal?: AbortSignal,
+  onProgress?: (progress: JobProgressInfo) => void,
+): Promise<StudioResult> {
   if (!BASE) {
     throw new StudioApiError(
       "The processing backend is not connected yet. Set VITE_STUDIO_API_URL to enable studio rendering.",
       "not_configured",
     );
   }
+
   const body = new FormData();
   body.append("file", file);
-  let res: Response;
+
+  if (kind === "image") {
+    onProgress?.({
+      status: "processing",
+      progressPct: 15,
+      stage: "uploading",
+      message: "Uploading car image to studio backend...",
+    });
+
+    let res: Response;
+    try {
+      res = await fetch(`${BASE}${IMAGE_PATH}`, { method: "POST", body, signal: signal ?? null });
+    } catch (e) {
+      if ((e as Error).name === "AbortError") throw e;
+      throw new StudioApiError("Could not reach the processing backend. Check your connection and try again.", "network");
+    }
+
+    onProgress?.({
+      status: "processing",
+      progressPct: 60,
+      stage: "rendering",
+      message: "Compositing vehicle into approved studio lighting...",
+    });
+
+    let data: Record<string, unknown> = {};
+    try {
+      data = await res.json();
+    } catch {
+      /* non-JSON body */
+    }
+
+    const errText = String(data["error"] ?? data["detail"] ?? data["message"] ?? "");
+    if (!res.ok || data["error"]) {
+      if (/no vehicle|vehicle not (found|detected)/i.test(errText)) {
+        throw new StudioApiError("No vehicle was detected in this media. Try a clearer photo where the full vehicle is visible.", "no_vehicle");
+      }
+      throw new StudioApiError(errText || `Processing failed (status ${res.status}).`, "server");
+    }
+
+    onProgress?.({
+      status: "completed",
+      progressPct: 100,
+      stage: "completed",
+      message: "Studio render completed.",
+    });
+
+    return parseResult(kind, file.name, data);
+  }
+
+  // --- Video Processing: Asynchronous Workflow with Real Progress Polling ---
+  onProgress?.({
+    status: "pending",
+    progressPct: 3,
+    stage: "uploading",
+    message: "Uploading video to studio backend...",
+  });
+
+  const uploadEndpoint = `${BASE}${VIDEO_PATH}${VIDEO_PATH.includes("?") ? "&" : "?"}async_mode=true`;
+
+  let postRes: Response;
   try {
-    res = await fetch(`${BASE}${kind === "image" ? IMAGE_PATH : VIDEO_PATH}`, { method: "POST", body, signal: signal ?? null });
+    postRes = await fetch(uploadEndpoint, { method: "POST", body, signal: signal ?? null });
   } catch (e) {
     if ((e as Error).name === "AbortError") throw e;
     throw new StudioApiError("Could not reach the processing backend. Check your connection and try again.", "network");
   }
-  let data: Record<string, unknown> = {};
+
+  let postData: Record<string, unknown> = {};
   try {
-    data = await res.json();
+    postData = await postRes.json();
   } catch {
     /* non-JSON body */
   }
-  const errText = String(data["error"] ?? data["detail"] ?? data["message"] ?? "");
-  if (!res.ok || data["error"]) {
-    if (/no vehicle|vehicle not (found|detected)/i.test(errText)) {
-      throw new StudioApiError("No vehicle was detected in this media. Try a clearer photo where the full vehicle is visible.", "no_vehicle");
+
+  const postErrText = String(postData["error"] ?? postData["detail"] ?? postData["message"] ?? "");
+  if (!postRes.ok || postData["error"]) {
+    if (/no vehicle|vehicle not (found|detected)/i.test(postErrText)) {
+      throw new StudioApiError("No vehicle was detected in this video. Try a clearer video where the vehicle is visible.", "no_vehicle");
     }
-    throw new StudioApiError(errText || `Processing failed (status ${res.status}).`, "server");
+    throw new StudioApiError(postErrText || `Video upload failed (status ${postRes.status}).`, "server");
   }
-  return parseResult(kind, file.name, data);
+
+  // If backend responded synchronously with a completed result
+  if (postData["status"] === "completed" && postData["result_url"]) {
+    onProgress?.({
+      status: "completed",
+      progressPct: 100,
+      stage: "completed",
+      message: "Video processing completed.",
+    });
+    return parseResult(kind, file.name, postData);
+  }
+
+  // Extract Job ID for polling
+  const jobId = (postData["job_id"] ?? postData["id"]) as string | undefined;
+  if (!jobId) {
+    throw new StudioApiError("Backend did not return a valid job ID for video processing.", "server");
+  }
+
+  onProgress?.({
+    jobId,
+    status: "processing",
+    progressPct: Number(postData["progress_pct"] ?? 5),
+    stage: String(postData["stage"] ?? "initializing"),
+    message: String(postData["message"] ?? "Initializing AI vision models..."),
+    currentFrame: postData["current_frame"] as number | undefined,
+    totalFrames: postData["total_frames"] as number | undefined,
+  });
+
+  // Poll job status until completion or failure
+  const POLL_INTERVAL_MS = 800;
+  while (true) {
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    await abortableSleep(POLL_INTERVAL_MS, signal);
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+
+    let pollRes: Response;
+    try {
+      pollRes = await fetch(`${BASE}/api/jobs/${jobId}`, { signal: signal ?? null });
+    } catch (e) {
+      if ((e as Error).name === "AbortError") throw e;
+      throw new StudioApiError("Connection to backend interrupted during job polling.", "network");
+    }
+
+    let jobData: Record<string, unknown> = {};
+    try {
+      jobData = await pollRes.json();
+    } catch {
+      throw new StudioApiError("Invalid status response from server.", "server");
+    }
+
+    if (!pollRes.ok) {
+      const errDetail = typeof jobData["detail"] === "object" ? (jobData["detail"] as any)?.error : jobData["detail"];
+      const pollErr = String(jobData["error"] ?? errDetail ?? `Status check failed (status ${pollRes.status})`);
+      throw new StudioApiError(pollErr, "server");
+    }
+
+    const jobStatus = String(jobData["status"] ?? "processing");
+    const progressPct = Number(jobData["progress_pct"] ?? 0);
+    const message = (jobData["message"] as string) ?? undefined;
+    const stage = (jobData["stage"] as string) ?? undefined;
+    const currentFrame = (jobData["current_frame"] as number) ?? undefined;
+    const totalFrames = (jobData["total_frames"] as number) ?? undefined;
+
+    onProgress?.({
+      jobId,
+      status: jobStatus as any,
+      progressPct,
+      stage,
+      message,
+      currentFrame,
+      totalFrames,
+    });
+
+    if (jobStatus === "completed") {
+      return parseResult(kind, file.name, jobData);
+    }
+
+    if (jobStatus === "failed") {
+      const errText = String(jobData["error"] ?? jobData["message"] ?? "Video processing failed.");
+      if (/no vehicle|vehicle not (found|detected)/i.test(errText)) {
+        throw new StudioApiError("No vehicle was detected in this video. Try a clearer video where the vehicle is clearly visible.", "no_vehicle");
+      }
+      throw new StudioApiError(errText || "Video processing failed.", "server");
+    }
+  }
 }
 
 export function formatBytes(n: number) {

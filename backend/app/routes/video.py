@@ -40,7 +40,8 @@ async def process_video_endpoint(
     file: UploadFile = File(..., description="Multipart vehicle video file (MP4, MOV)"),
     fictional_plate_text: Optional[str] = Form(None, description="Custom text for fictional license plate"),
     enable_temporal_smoothing: bool = Form(True, description="Enable inter-frame temporal smoothing"),
-    async_mode: bool = Query(False, description="Whether to process in background and poll /api/jobs/{job_id}"),
+    async_mode: Optional[bool] = Query(None, description="Whether to process in background and poll /api/jobs/{job_id} (defaults to True)"),
+    async_form: Optional[bool] = Form(None, alias="async_mode", description="Async mode via form field"),
 ) -> Union[VideoProcessResponse, JobProgressResponse]:
     """
     Accept an uploaded vehicle video, extract frames, process them sequentially
@@ -49,6 +50,13 @@ async def process_video_endpoint(
     filename = file.filename or "uploaded_video.mp4"
     job_id, job_dir = FileService.create_job_workspace()
     temp_input_path = os.path.join(job_dir, f"input_{FileService.sanitize_filename(filename)}")
+
+    # Resolve async flag (defaults to True for responsive background processing)
+    resolved_async = (
+        async_mode
+        if async_mode is not None
+        else (async_form if async_form is not None else True)
+    )
 
     try:
         # Stream upload directly to disk
@@ -67,7 +75,7 @@ async def process_video_endpoint(
         options = VideoProcessOptions(
             fictional_plate_text=fictional_plate_text,
             enable_temporal_smoothing=enable_temporal_smoothing,
-            async_mode=async_mode,
+            async_mode=resolved_async,
         )
 
         # Initialize job in manager
@@ -82,7 +90,7 @@ async def process_video_endpoint(
             job_id=job_id,
         )
 
-        if async_mode:
+        if resolved_async:
             return res
 
         return VideoProcessResponse(

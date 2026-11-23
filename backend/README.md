@@ -187,8 +187,25 @@ Upload a vehicle video (MP4, MOV) to process frame-by-frame with temporal consis
   - `file` *(required)*: Binary video file.
   - `fictional_plate_text` *(optional)*: Custom text for plate.
   - `enable_temporal_smoothing` *(optional, bool)*: EMA box & mask stabilization (default: `true`).
-  - `async_mode` *(query parameter, bool)*: If `true`, returns `202 Accepted` with initial job response for polling. Defaults to `false` for direct synchronous completion as expected by Arya's frontend.
-- **Response `200 OK`**:
+  - `async_mode` *(query or form parameter, bool)*: If `true` (default), returns `202 Accepted` with a job response (`JobProgressResponse`) for real-time progress polling. Set to `false` to block synchronously until video rendering completes.
+- **Asynchronous Response `202 Accepted` (Default)**:
+  ```json
+  {
+    "job_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+    "kind": "video",
+    "status": "pending",
+    "stage": "initializing",
+    "progress_pct": 0.0,
+    "current_frame": 0,
+    "total_frames": 0,
+    "result_url": null,
+    "download_url": null,
+    "message": "Video job registered and queued for processing.",
+    "error": null,
+    "success": true
+  }
+  ```
+- **Synchronous Response `200 OK` (when `?async_mode=false`)**:
   ```json
   {
     "job_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
@@ -220,13 +237,15 @@ Retrieve real-time processing status, progress percentage, and result URLs for a
     "job_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
     "kind": "video",
     "status": "processing",
+    "stage": "processing_frames",
     "progress_pct": 65.4,
     "current_frame": 78,
     "total_frames": 120,
     "result_url": null,
     "download_url": null,
     "message": "Processing frame 78 of 120 (65.4%)",
-    "error": null
+    "error": null,
+    "success": true
   }
   ```
 

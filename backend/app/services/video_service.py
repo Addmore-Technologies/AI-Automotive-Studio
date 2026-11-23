@@ -35,7 +35,9 @@ class JobManager:
             job_id=job_id,
             kind=kind,
             status=JobStatus.PENDING,
+            success=True,
             progress_pct=0.0,
+            stage="initializing",
             current_frame=0,
             total_frames=total_frames,
             message="Job queued for processing.",
@@ -49,6 +51,7 @@ class JobManager:
         job_id: str,
         status: Optional[JobStatus] = None,
         progress_pct: Optional[float] = None,
+        stage: Optional[str] = None,
         current_frame: Optional[int] = None,
         total_frames: Optional[int] = None,
         result_url: Optional[str] = None,
@@ -66,8 +69,14 @@ class JobManager:
 
             if status is not None:
                 job.status = status
+                if status == JobStatus.FAILED:
+                    job.success = False
+                elif status == JobStatus.COMPLETED:
+                    job.success = True
             if progress_pct is not None:
                 job.progress_pct = round(progress_pct, 1)
+            if stage is not None:
+                job.stage = stage
             if current_frame is not None:
                 job.current_frame = current_frame
             if total_frames is not None:
@@ -167,14 +176,15 @@ class VideoService:
         job_manager.update_job(
             job_id,
             status=JobStatus.PROCESSING,
-            progress_pct=0.0,
-            message="Extracting frames and initializing vision pipeline...",
+            progress_pct=2.0,
+            stage="initializing",
+            message="Extracting video frames and initializing vision pipeline...",
         )
 
         cap = cv2.VideoCapture(input_video_path)
         if not cap.isOpened():
             err_msg = "Could not open video file for processing."
-            job_manager.update_job(job_id, status=JobStatus.FAILED, error=err_msg, message=err_msg)
+            job_manager.update_job(job_id, status=JobStatus.FAILED, stage="failed", error=err_msg, message=err_msg)
             FileService.cleanup_job_workspace(job_id)
             raise CorruptedFileError(err_msg)
 
@@ -191,7 +201,7 @@ class VideoService:
         if not writer.isOpened():
             cap.release()
             err_msg = "Failed to initialize video encoder on the host system."
-            job_manager.update_job(job_id, status=JobStatus.FAILED, error=err_msg, message=err_msg)
+            job_manager.update_job(job_id, status=JobStatus.FAILED, stage="failed", error=err_msg, message=err_msg)
             FileService.cleanup_job_workspace(job_id)
             raise RuntimeError(err_msg)
 
@@ -223,13 +233,14 @@ class VideoService:
 
                 writer.write(comp_frame)
 
-                # Periodic progress update
-                progress = round((frame_idx / max(total_frames, 1)) * 95.0, 1)
+                # Periodic progress update scaled between 5% and 92%
+                progress = round(5.0 + (frame_idx / max(total_frames, 1)) * 87.0, 1)
                 job_manager.update_job(
                     job_id,
-                    progress_pct=min(progress, 95.0),
+                    progress_pct=min(progress, 92.0),
+                    stage="processing_frames",
                     current_frame=frame_idx,
-                    message=f"Processing frame {frame_idx} of {total_frames} ({progress}%)",
+                    message=f"Detecting & segmenting vehicles (frame {frame_idx} of {total_frames})",
                 )
 
             cap.release()
@@ -238,11 +249,16 @@ class VideoService:
             # Check if any vehicle was detected at all throughout the video
             if detected_frames_count == 0 and frame_idx > 0:
                 err_msg = "No vehicle was detected in the provided video."
-                job_manager.update_job(job_id, status=JobStatus.FAILED, error=err_msg, message=err_msg)
+                job_manager.update_job(job_id, status=JobStatus.FAILED, stage="failed", error=err_msg, message=err_msg)
                 raise NoVehicleDetectedException(err_msg)
 
-            # Audio preservation step
-            job_manager.update_job(job_id, progress_pct=96.0, message="Finalizing video encoding...")
+            # Audio preservation and final video encoding step
+            job_manager.update_job(
+                job_id,
+                progress_pct=95.0,
+                stage="rendering",
+                message="Compositing and encoding studio video...",
+            )
             audio_muxed = cls._preserve_audio_if_feasible(input_video_path, temp_rendered_path, final_output_path)
             if not audio_muxed:
                 # Direct move of rendered video if ffmpeg not present or audio not muxed
@@ -258,6 +274,7 @@ class VideoService:
                 job_id,
                 status=JobStatus.COMPLETED,
                 progress_pct=100.0,
+                stage="completed",
                 current_frame=frame_idx,
                 total_frames=frame_idx,
                 result_url=result_url,
@@ -277,10 +294,20 @@ class VideoService:
             return job_resp
 
         except Exception as e:
-            cap.release()
-            writer.release()
-            job_manager.update_job(job_id, status=JobStatus.FAILED, error=str(e), message=f"Processing failed: {e}")
-            raise e
+            if 'cap' in locals() and cap is not None:
+                try:
+                    cap.release()
+                except Exception:
+                    pass
+            if 'writer' in locals() and writer is not None:
+                try:
+                    writer.release()
+                except Exception:
+                    pass
+            job_manager.update_job(job_id, status=JobStatus.FAILED, stage="failed", error=str(e), message=f"Processing failed: {e}")
+            if not options.async_mode:
+                raise e
+            return job_manager.get_job(job_id)
         finally:
             FileService.cleanup_job_workspace(job_id)
 
